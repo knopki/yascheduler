@@ -1,0 +1,112 @@
+# region MODULE_CONTRACT
+# PURPOSE: Unit tests for select_provider_pure — pure cloud provider selection.
+# SCOPE: select_provider_pure priority/capacity/platform-support behavior.
+# KEYWORDS: select_provider_pure, provider selection, priority, capacity
+# endregion MODULE_CONTRACT
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, cast
+from unittest.mock import MagicMock
+
+from yascheduler.infra.cloud.adapters import CloudAdapter
+from yascheduler.infra.cloud.provider_selection import select_provider_pure
+
+if TYPE_CHECKING:
+    from yascheduler.infra.cloud import ConfigCloud
+
+
+def _make_adapter(name: str, supports_platforms: list[str]) -> CloudAdapter:
+    """Build a mock CloudAdapter matching the contract used by select_provider_pure."""
+    adapter = MagicMock(spec=CloudAdapter)
+    adapter.name = name
+    # supported_platform_checks: iterable of callables; each takes a platform str and returns bool
+    adapter.supported_platform_checks = [
+        lambda p, sp=sp: p == sp for sp in supports_platforms
+    ]
+    return cast("CloudAdapter", adapter)
+
+
+def _make_config(max_nodes: int, priority: int, username: str = "root") -> ConfigCloud:
+    """Build a mock ConfigCloud with the fields select_provider_pure reads."""
+    cfg = MagicMock()
+    cfg.max_nodes = max_nodes
+    cfg.priority = priority
+    cfg.username = username
+    return cast("ConfigCloud", cfg)
+
+
+class TestSelectProviderPure:
+    def test_higher_priority_wins(self) -> None:
+        """When multiple providers have capacity, the highest-priority one wins."""
+        adapter_a = _make_adapter("aws", ["linux"])
+        adapter_b = _make_adapter("gcp", ["linux"])
+        adapters = {"aws": adapter_a, "gcp": adapter_b}
+        configs = {
+            "aws": _make_config(max_nodes=10, priority=50),
+            "gcp": _make_config(max_nodes=10, priority=100),
+        }
+        result = select_provider_pure(adapters, configs, ["linux"], {})
+        assert result is not None
+        assert result.name == "gcp"  # higher priority
+
+    def test_full_provider_skipped(self) -> None:
+        """When current_counts >= max_nodes, provider excluded."""
+        adapter_a = _make_adapter("aws", ["linux"])
+        adapters = {"aws": adapter_a}
+        configs = {"aws": _make_config(max_nodes=5, priority=100)}
+        # aws is full
+        result = select_provider_pure(adapters, configs, ["linux"], {"aws": 5})
+        assert result is None
+
+    def test_no_platform_support_returns_none(self) -> None:
+        """When no provider supports any requested platform, return None."""
+        adapter_a = _make_adapter("aws", ["linux"])
+        adapters = {"aws": adapter_a}
+        configs = {"aws": _make_config(max_nodes=10, priority=100)}
+        # Request windows, but aws only supports linux
+        result = select_provider_pure(adapters, configs, ["windows"], {"aws": 0})
+        assert result is None
+
+    def test_multiple_platforms_any_match(self) -> None:
+        """Provider supporting ANY of the requested platforms qualifies."""
+        adapter_a = _make_adapter("aws", ["linux", "windows"])
+        adapters = {"aws": adapter_a}
+        configs = {"aws": _make_config(max_nodes=10, priority=100)}
+        # Request both; aws matches linux
+        result = select_provider_pure(
+            adapters,
+            configs,
+            ["linux", "windows"],
+            {"aws": 0},
+        )
+        assert result is adapter_a
+
+    def test_empty_adapters_returns_none(self) -> None:
+        """Empty adapters dict returns None."""
+        result = select_provider_pure({}, {}, ["linux"], {})
+        assert result is None
+
+    def test_empty_current_counts(self) -> None:
+        """Empty current_counts means all providers at zero, full availability."""
+        adapter_a = _make_adapter("aws", ["linux"])
+        adapters = {"aws": adapter_a}
+        configs = {"aws": _make_config(max_nodes=10, priority=100)}
+        result = select_provider_pure(adapters, configs, ["linux"], {})
+        assert result is adapter_a
+
+    def test_config_none_skipped(self) -> None:
+        """Provider with no config entry is skipped (defensive)."""
+        adapter_a = _make_adapter("aws", ["linux"])
+        adapters = {"aws": adapter_a}
+        configs = {}  # no config for aws
+        result = select_provider_pure(adapters, configs, ["linux"], {})
+        assert result is None
+
+    def test_below_max_partial_capacity(self) -> None:
+        """Provider at 3/5 capacity is still selectable."""
+        adapter_a = _make_adapter("aws", ["linux"])
+        adapters = {"aws": adapter_a}
+        configs = {"aws": _make_config(max_nodes=5, priority=100)}
+        result = select_provider_pure(adapters, configs, ["linux"], {"aws": 3})
+        assert result is adapter_a

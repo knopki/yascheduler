@@ -7,11 +7,11 @@
 **Yascheduler** is a simple job scheduler designed for submitting scientific
 calculations and copying back the results from the computing clouds.
 
-Currently it supports several scientific simulation codes in chemistry
-and solid state physics.
-Any other scientific simulation code can be supported via the declarative
-control template system (see `yascheduler.conf` settings file).
-There is an [example dummy C++ code][dummy-engine] with its configuration template.
+Currently it supports several scientific simulation codes in chemistry and solid
+state physics. Any other scientific simulation code can be supported via the
+declarative control template system (see `yascheduler.conf` settings file).
+There is an [example dummy C++ code](https://github.com/tilde-lab/dummy-engine)
+with its configuration template.
 
 ## Installation
 
@@ -21,9 +21,7 @@ By default, no cloud connectors are installed.
 To install the appropriate connector, use one of the commands:
 
 - for Microsoft Azure: `pip install yascheduler[azure]`
-- for Hetzner Cloud: `pip install yascheduler[hetzner]`
 - for UpCloud: `pip install yascheduler[upcloud]`
-- for Vultr: no extra dependencies required (`pip install yascheduler`)
 
 The last updates and bugfixes can be obtained cloning the repository:
 
@@ -35,7 +33,7 @@ pip install yascheduler/
 The installation procedure creates the configuration file located at
 `/etc/yascheduler/yascheduler.conf`.
 The file contains credentials for Postgres database access, used directories,
-cloud providers and scientific simulation codes (called _engines_).
+cloud providers and scientific simulation codes (called *engines*).
 Please check and amend this file with the correct credentials. The database
 and the system service should then be initialized with `yainit` script.
 
@@ -55,11 +53,12 @@ result = yac.queue_submit_task(
 print(result)
 ```
 
-Or run directly in console with `yascheduler` (use a key `-l DEBUG` to change the log level).
+Or run directly in console with `yascheduler` (use a key `-l DEBUG` to change
+the log level).
 
-_Supervisor_ config reads e.g.:
+*Supervisor* config reads e.g.:
 
-```
+```ini
 [program:scheduler]
 command=/usr/local/bin/yascheduler
 user=root
@@ -72,472 +71,35 @@ stdout_logfile=/data/yascheduler.log
 File paths can be set using the environment variables:
 
 - `YASCHEDULER_CONF_PATH`
-
   Configuration file.
-
-  _Default_: `/etc/yascheduler/yascheduler.conf`
+  *Default*: `/etc/yascheduler/yascheduler.conf`
 
 - `YASCHEDULER_LOG_PATH`
-
   Log file path.
-
-  _Default_: `/var/log/yascheduler.log`
+  *Default*: `/var/log/yascheduler.log`
 
 - `YASCHEDULER_PID_PATH`
-
   PID file.
+  *Default*: `/var/run/yascheduler.pid`
 
-  _Default_: `/var/run/yascheduler.pid`
+## Configuration
 
-## Configuration File Reference
+Yascheduler reads its settings from an INI file. The file path is set by the
+`YASCHEDULER_CONF_PATH` environment variable (see [Usage](#usage) above).
 
-### Database Configuration `[db]`
+The file covers the PostgreSQL database, local daemon settings, remote SSH
+defaults, cloud providers, and calculation engines. Every section, key, and
+default is documented in **[docs/CONFIG.md](docs/CONFIG.md)**.
 
-Connection to a PostgreSQL database.
-
-- `user`
-
-  The username to connect to the PostgreSQL server with.
-
-- `password`
-
-  The user password to connect to the server with. This parameter is optional
-
-- `host`
-
-  The hostname of the PostgreSQL server to connect with.
-
-- `port`
-
-  The TCP/IP port of the PostgreSQL server instance.
-
-  _Default_: `5432`
-
-- `database`
-
-  The name of the database instance to connect with.
-
-  _Default_: Same as `user`
-
-### Local Settings `[local]`
-
-- `data_dir`
-
-  Path to root directory of local data files.
-  Can be relative to the current working directory.
-
-  _Default_: `./data` (but it's always a good idea to set up explicitly!)
-
-  _Example_: `/srv/yadata`
-
-- `tasks_dir`
-
-  Path to directory with tasks results.
-
-  _Default_: `tasks` under `data_dir`
-
-  _Example_: `%(data_dir)s/tasks`
-
-- `keys_dir`
-
-  Path to directory with SSH keys. Make sure it only contains the private keys.
-
-  _Default_: `keys` under `data_dir`
-
-  _Example_: `%(data_dir)s/keys`
-
-- `engines_dir`
-
-  Path to directory with engines repository.
-
-  _Default_: `engines` under `data_dir`
-
-  _Example_: `%(data_dir)s/engines`
-
-- `webhook_reqs_limit`
-
-  Maximum number of in-flight webhook http requests.
-
-  _Default_: 5
-
-- `conn_machine_limit`
-
-  Maximum number of concurrent SSH connection's `connect` requests.
-
-  _Default_: 10
-
-- `conn_machine_pending`
-
-  Maximum number of pending SSH connection's `connect` requests.
-
-  _Default_: 10
-
-- `allocate_limit`
-
-  Maximum number of concurrent task or node allocation requests.
-
-  _Default_: 20
-
-- `allocate_pending`
-
-  Maximum number of pending task or node allocation requests.
-
-  _Default_: 1
-
-- `consume_limit`
-
-  Maximum number of concurrent task's results downloads.
-
-  _Default_: 20
-
-- `consume_pending`
-
-  Maximum number of pending task's results downloads.
-
-  _Default_: 1
-
-- `deallocate_limit`
-
-  Maximum number of concurrent node deallocation requests.
-
-  _Default_: 5
-
-- `deallocate_pending`
-
-  Maximum number of pending node deallocation requests.
-
-  _Default_: 1
-
-### Remote Settings `[remote]`
-
-- `data_dir`
-
-  Path to root directory of data files on remote node.
-  Can be relative to the remote current working directory (usually `$HOME`).
-
-  _Default_: `./data`
-
-  _Example_: `/src/yadata`
-
-- `tasks_dir`
-
-  Path to directory with tasks results on remote node.
-
-  _Default_: `tasks` under `data_dir`
-
-  _Example_: `%(data_dir)s/tasks`
-
-- `engines_dir`
-
-  Path to directory with engines on remote node.
-
-  _Default_: `engines` under `data_dir`
-
-  _Example_: `%(data_dir)s/engines`
-
-- `user`
-
-  Default ssh username.
-
-  _Default_: `root`
-
-- `jump_user`
-
-  Username of default SSH _jump host_ (if used).
-
-- `jump_host`
-
-  Host of default SSH _jump host_ (if used).
-
-### Providers `[clouds]`
-
-All cloud providers settings are set in the `[clouds]` group.
-Each provider has its own settings prefix.
-
-These settings are common to all the providers:
-
-- `*_max_nodes`
-
-  The maximum number of nodes for a given provider.
-  The provider is not used if the value is less than 1.
-
-- `*_user`
-
-  Per provider override of `remote.user`.
-
-- `*_priority`
-
-  Per provider priority of node allocation.
-  Sorted in descending order, so the cloud with the highest value is the first.
-
-- `*_idle_tolerance`
-
-  Per provider idle tolerance (in seconds) for deallocation of nodes.
-
-  _Default_: different for providers, starting from 120 seconds.
-
-- `*_jump_user`
-
-  Username of this cloud SSH jump host (if used).
-
-- `*_jump_host`
-
-  Host of this cloud SSH jump host (if used).
-
-#### Hetzner
-
-Settings prefix is `hetzner`.
-
-- `hetzner_token`
-
-  API token with Read & Write permissions for the project.
-
-- `hetzner_server_type`
-
-  Server type (size).
-
-  _Default_: `cx52`
-
-- `hetzner_location`
-
-  Location name.
-
-- `hetzner_image_name`
-
-  Image name for new nodes.
-
-  _Default_: `debian-11`
-
-#### Azure
-
-Azure Cloud should be pre-configured for `yascheduler`. See [Cloud Providers](CLOUD.md).
-
-Settings prefix is `az`.
-
-- `az_tenant_id`
-
-  Tenant ID of Azure Active Directory.
-
-- `az_client_id`
-
-  Application ID.
-
-- `az_client_secret`
-
-  Client Secret value from the **Application Registration**.
-
-- `az_subscription_id`
-
-  Subscription ID
-
-- `az_resource_group`
-
-  Resource Group name.
-
-  _Default_: `yascheduler-rg`
-
-- `az_user`
-
-  SSH username. `root` is not supported.
-
-- `az_location`
-
-  Default location for resources.
-
-  _Default_: `westeurope`
-
-- `az_vnet`
-
-  Virtual network name.
-
-  _Default_: `yascheduler-vnet`
-
-- `az_subnet`
-
-  Subnet name.
-
-  _Default_: `yascheduler-subnet`
-
-- `az_nsg`
-
-  Network security group name.
-
-  _Default_: `yascheduler-nsg`
-
-- `az_vm_image`
-
-  OS image name.
-
-  _Default_: `Debian`
-
-- `az_vm_size`
-
-  Machine size.
-
-  _Default_: `Standard_B1s`
-
-#### UpCloud
-
-Settings prefix is `upcloud`.
-
-- `upcloud_login`
-
-  Username.
-
-- `upcloud_password`
-
-  Password.
-
-#### Vultr
-
-Vultr provides **bare-metal** instances suitable for heavy `ab initio`
-calculations. This integration uses the Vultr REST API v2 directly via `urllib`
-(no extra Python dependency is required — only `asyncssh`, which is already a
-core dependency).
-
-See [Cloud Providers](CLOUD.md) for details on bare-metal provisioning, RAID0
-NVMe setup, and cloud-init configuration.
-
-Settings prefix is `vultr`.
-
-- `vultr_api_key`
-
-  Vultr API key (required). Create one in the
-  [Vultr customer portal](https://my.vultr.com/settings/#settingsapi).
-
-- `vultr_location`
-
-  Datacenter region (Vultr API `region`).
-
-  _Default_: `ams`
-
-- `vultr_server_type`
-
-  Bare-metal plan id (Vultr API `plan`).
-
-  _Default_: `vbm-24c-256gb-amd`
-
-- `vultr_image_name`
-
-  Vultr OS id (integer, sent as `os_id` in the API). For example, `2284` =
-  Ubuntu 24.04 LTS x64, `2136` = Debian 12.
-
-  _Default_: `2284`
-
-- `vultr_need_raid`
-
-  Whether cloud-init sets up RAID0 NVMe + `/dev/shm`. Set to `False` for plans
-  where NVMe is already the main disk (e.g. `vbm-8c-132gb`).
-
-  _Default_: `True`
-
-### Engines `[engine.*]`
-
-Supported engines should be defined in the section(s) `[engine.name]`.
-The name is alphanumeric string to represent the real engine name.
-Once set, it cannot be changed later.
-
-- `platforms`
-
-  List of supported platform, separated by space or newline.
-
-  _Default_: `debian-10`
-  _Example_: `mY-cOoL-OS another-cool-os`
-
-- `platform_packages`
-
-  A list of required packages, separated by space or newline, which
-  will be installed by the system package manager.
-
-  _Default_: []
-  _Example_: `openmpi-bin wget`
-
-- `deploy_local_files`
-
-  A list of filenames, separated by space or newline, which will be copied
-  from local `%(engines_dir)s/%(engine_name)s` to remote
-  `%(engines_dir)s/%(engine_name)s`.
-  Conflicts with `deploy_local_archive` and `deploy_remote_archive`.
-
-  _Example_: `dummyengine`
-
-- `deploy_local_archive`
-
-  A name of the local archive (`.tar.gz`) which will be copied
-  from local `%(engines_dir)s/%(engine_name)s` to the remote machine and
-  then unarchived to the `%(engines_dir)s/%(engine_name)s`.
-  Conflicts with `deploy_local_archive` and `deploy_remote_archive`.
-
-  _Example_: `dummyengine.tar.gz`
-
-- `deploy_remote_archive`
-
-  The url to the engine arhive (`.tar.gz`) which will be downloaded
-  to the remote machine and then unarchived to the
-  `%(engines_dir)s/%(engine_name)s`.
-  Conflicts with `deploy_local_archive` and `deploy_remote_archive`.
-
-  _Example_: `https://example.org/dummyengine.tar.gz`
-
-- `spawn`
-
-  This command is used by the scheduler to initiate calculations.
-
-  ```sh
-  cp {task_path}/INPUT OUTPUT && mpirun -np {ncpus} --allow-run-as-root \
-    -wd {task_path} {engine_path}/Pcrystal >> OUTPUT 2>&1
-
-  ```
-
-  _Example_: `{engine_path}/gulp < INPUT > OUTPUT`
-
-- `check_pname`
-
-  Process name used to check that the task is still running.
-  Conflicts with `check_cmd`.
-
-  _Example_: `dummyengine`
-
-- `check_cmd`
-
-  Command used to check that the task is still running.
-  Conflicts with `check_pname`. See also `check_cmd_code`.
-
-  _Example_: `ps ax -ocomm= | grep -q dummyengine`
-
-- `check_cmd_code`
-
-  Expected exit code of command from `check_cmd`.
-  If code matches than task is running.
-
-  _Default_: `0`
-
-- `sleep_interval`
-
-  Interval in seconds between the task checks.
-  Set to a higher value if you are expecting long running jobs.
-
-  _Default_: `10`
-
-- `input_files`
-
-  A list of task input file names, separated by a space or new line,
-  that will be copied to the remote directory of the task before it is started.
-  The first input is considered as the **main** input.
-
-  _Example_: `INPUT sibling.file`
-
-- `output_files`
-
-  A list of task output file names, separated by a space or new line,
-  that will be copied from the remote directory of the task after it is finished.
-
-  _Example_: `INPUT OUTPUT`
+For cloud-provider-specific setup (Azure, VastAI, Vultr), see also
+[docs/AZURE.md](docs/AZURE.md), [docs/VASTAI.md](docs/VASTAI.md),
+[docs/VULTR.md](docs/VULTR.md).
 
 ## Aiida Integration
 
-See the detailed instructions for the [MPDS-AiiDA-CRYSTAL workflows][mpds-aiida]
-as well as the [ansible-mpds][ansible-aiida] repository. In essence:
+See the detailed instructions for the [MPDS-AiiDA-CRYSTAL
+workflows](https://github.com/mpds-io/mpds-aiida) as well as the
+[ansible-mpds](https://github.com/mpds-io/ansible-mpds) repository. In essence:
 
 ```sh
 ssh aiidauser@localhost # important
@@ -546,10 +108,6 @@ verdi computer setup
 verdi computer test $COMPUTER
 verdi code setup
 ```
-
-[ansible-aiida]: https://github.com/mpds-io/ansible-mpds
-[mpds-aiida]: https://github.com/mpds-io/mpds-aiida
-[dummy-engine]: https://github.com/tilde-lab/dummy-engine
 
 ## License
 

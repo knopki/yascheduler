@@ -47,18 +47,20 @@ Then run build script:
 packer build ./hcloud-debian-12-fleur.pkr.hcl
 ```
 
-This can take 15 to 20 minutes.
-If everything is successful, the last line will show the image ID. Remember this ID - you will need to specify it in `yascheduler.conf`.
+This can take 15 to 20 minutes. If everything is successful, the last line will
+show the image ID. Remember this ID - you will need to specify it in
+`yascheduler.conf`.
 
-```
+```text
 --> hcloud.debian: A snapshot was created: 'fleur-debian-xxxxx' (ID: 123123123)
 ```
 
 As a result, we have an OS image (snapshot) with the usual
 Debian 12 with `inpgen` and `fleur` already installed.
 
-Let's configure `yascheduler` to use our OS image.
-Setup `db`, `local` and `remote` sections in `yascheduler.conf` as usual. Add `clouds` and engines sections:
+Let's configure `yascheduler` to use our OS image. Setup `db`, `local` and
+`remote` sections in `yascheduler.conf` as usual. Add `clouds` and engines
+sections:
 
 ```ini
 [engine.inpgen]
@@ -71,7 +73,9 @@ output_files = aiida.in inp.xml default.econfig shell.out out out.error scratch 
 spawn = fleur -minimalOutput -wtime 360 > shell.out 2> out.error
 check_cmd = ps -eocomm= | grep -q fleur
 input_files = inp.xml
-output_files = inp.xml kpts.xml sym.xml relax.xml shell.out out.error out out.xml FleurInputSchema.xsd FleurOutputSchema.xsd juDFT_times.json cdn1 usage.json
+output_files = inp.xml kpts.xml sym.xml relax.xml shell.out out.error
+  out out.xml FleurInputSchema.xsd FleurOutputSchema.xsd juDFT_times.json
+  cdn1 usage.json
 
 [clouds]
 ; Your API key

@@ -1,0 +1,5 @@
+ALTER TABLE yascheduler_nodes
+ADD COLUMN IF NOT EXISTS username VARCHAR(255) DEFAULT 'root';
+
+ALTER TABLE yascheduler_nodes
+ADD COLUMN IF NOT EXISTS port INTEGER DEFAULT 22;

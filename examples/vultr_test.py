@@ -12,6 +12,8 @@ Usage:
     python examples/vultr_test.py delete --id <instance_id>
 """
 
+from __future__ import annotations
+
 import argparse
 import base64
 import hashlib
@@ -22,13 +24,12 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from typing import Optional
 
 API_BASE = "https://api.vultr.com/v2"
 
 DEFAULT_LOCATION = "ams"
 DEFAULT_SERVER_TYPE = "vbm-24c-256gb-amd"
-DEFAULT_IMAGE_NAME = 2284
+DEFAULT_IMAGE_NAME = 2136
 DEFAULT_SSH_KEY_PATH = os.path.expanduser("~/.ssh/id_rsa.pub")
 POLL_INTERVAL = 20
 POLL_TIMEOUT = 1200
@@ -43,7 +44,7 @@ def get_api_key() -> str:
     return api_key
 
 
-def vultr_request(method: str, path: str, body: Optional[dict] = None) -> dict:
+def vultr_request(method: str, path: str, body: dict | None = None) -> dict:
     api_key = get_api_key()
     url = API_BASE + path
 
@@ -95,7 +96,7 @@ def ssh_key_fingerprint_md5(pubkey: str) -> str:
     # NOTE: MD5 is required here to match the Vultr API fingerprint format,
     # not for cryptographic security.
     parts = pubkey.split()
-    if len(parts) < 2:
+    if len(parts) <= 1:
         return ""
     key_bytes = base64.b64decode(parts[1])
     md5_hex = hashlib.md5(key_bytes).hexdigest()
@@ -169,8 +170,8 @@ def create_baremetal(
     image_name: int,
     label: str,
     hostname: str,
-    sshkey_id: Optional[str] = None,
-    user_data: Optional[str] = None,
+    sshkey_id: str | None = None,
+    user_data: str | None = None,
 ) -> dict:
     body: dict = {
         "region": location,
@@ -185,23 +186,22 @@ def create_baremetal(
     if user_data:
         body["user_data"] = base64.b64encode(user_data.encode()).decode()
 
-    data = vultr_request("POST", "/bare-metals", body)
-    return data
+    return vultr_request("POST", "/bare-metals", body)
 
 
 def list_baremetals() -> None:
     data = vultr_request("GET", "/bare-metals?per_page=500")
     rows = [["ID", "LABEL", "STATUS", "IP", "REGION"]]
-    for bm in data.get("bare_metals", []):
-        rows.append(
-            [
-                bm.get("id", ""),
-                bm.get("label", ""),
-                bm.get("status", ""),
-                bm.get("main_ip", ""),
-                bm.get("region", ""),
-            ]
-        )
+    rows.extend(
+        [
+            bm.get("id", ""),
+            bm.get("label", ""),
+            bm.get("status", ""),
+            bm.get("main_ip", ""),
+            bm.get("region", ""),
+        ]
+        for bm in data.get("bare_metals", [])
+    )
     print_table(rows)
 
 
@@ -210,7 +210,7 @@ def delete_baremetal(instance_id: str) -> None:
     print(f"Deleted bare-metal instance: {instance_id}")
 
 
-def poll_baremetal(instance_id: str, timeout: int = POLL_TIMEOUT) -> Optional[str]:
+def poll_baremetal(instance_id: str, timeout: int = POLL_TIMEOUT) -> str | None:
     print(f"Waiting for instance {instance_id} to become active...")
     deadline = time.time() + timeout
     last_status = None
@@ -244,7 +244,7 @@ def check_ssh(ip: str, port: int = 22, timeout: int = 60) -> bool:
     return False
 
 
-def cmd_create(args) -> None:
+def cmd_create(args: argparse.Namespace) -> None:
     pubkey_path = args.ssh_key
     if not os.path.exists(pubkey_path):
         print(f"ERROR: SSH public key not found: {pubkey_path}", file=sys.stderr)
@@ -272,15 +272,15 @@ def cmd_create(args) -> None:
     print(f"cloud-init user-data ({len(user_data)} bytes) applied")
 
 
-def cmd_list(args) -> None:
+def cmd_list(_: object) -> None:
     list_baremetals()
 
 
-def cmd_delete(args) -> None:
+def cmd_delete(args: argparse.Namespace) -> None:
     delete_baremetal(args.id)
 
 
-def cmd_test(args) -> None:
+def cmd_test(args: argparse.Namespace) -> None:
     pubkey_path = args.ssh_key
     if not os.path.exists(pubkey_path):
         print(f"ERROR: SSH public key not found: {pubkey_path}", file=sys.stderr)
